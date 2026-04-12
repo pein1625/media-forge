@@ -1,0 +1,25 @@
+{
+  "name": "@media-forge/kafka",
+  "version": "1.0.0",
+  "description": "Kafka integration for Media Forge microservices",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^10.0.0",
+    "@nestjs/microservices": "^10.0.0",
+    "kafkajs": "^2.2.0",
+    "@media-forge/types": "*"
+  },
+  "keywords": [
+    "media",
+    "forge",
+    "kafka",
+    "microservices",
+    "messaging"
+  ],
+  "author": "",
+  "license": "MIT"
+}

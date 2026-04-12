@@ -1,0 +1,308 @@
+services:
+  # ═══ INFRASTRUCTURE ═══════════════════════════
+
+  # PostgreSQL — User Service DB
+  pg-user:
+    image: postgres:16-alpine
+    container_name: mf-pg-user
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MF_PG_USER_PASS:-changeme}
+    ports:
+      - '${MF_PORT_PREFIX:-40}33:5432'
+    volumes:
+      - pg-user-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [media-net]
+
+  # PostgreSQL — Upload Service DB
+  pg-upload:
+    image: postgres:16-alpine
+    container_name: mf-pg-upload
+    environment:
+      POSTGRES_DB: upload_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MF_PG_UPLOAD_PASS:-changeme}
+    ports:
+      - '${MF_PORT_PREFIX:-40}34:5432'
+    volumes:
+      - pg-upload-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [media-net]
+
+  # PostgreSQL — Catalog Service DB
+  pg-catalog:
+    image: postgres:16-alpine
+    container_name: mf-pg-catalog
+    environment:
+      POSTGRES_DB: catalog_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MF_PG_CATALOG_PASS:-changeme}
+    ports:
+      - '${MF_PORT_PREFIX:-40}35:5432'
+    volumes:
+      - pg-catalog-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [media-net]
+
+  # PostgreSQL — Transcode Service DB
+  pg-transcode:
+    image: postgres:16-alpine
+    container_name: mf-pg-transcode
+    environment:
+      POSTGRES_DB: transcode_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MF_PG_TRANSCODE_PASS:-changeme}
+    ports:
+      - '${MF_PORT_PREFIX:-40}36:5432'
+    volumes:
+      - pg-transcode-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [media-net]
+
+  # PostgreSQL — AI Service DB
+  pg-ai:
+    image: postgres:16-alpine
+    container_name: mf-pg-ai
+    environment:
+      POSTGRES_DB: ai_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MF_PG_AI_PASS:-changeme}
+    ports:
+      - '${MF_PORT_PREFIX:-40}37:5432'
+    volumes:
+      - pg-ai-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [media-net]
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: mf-redis
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - '${MF_PORT_PREFIX:-40}79:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [media-net]
+
+  # Kafka (KRaft — no Zookeeper)
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: mf-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${MF_PORT_PREFIX:-40}92
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+    ports:
+      - '${MF_PORT_PREFIX:-40}92:29092'
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [media-net]
+
+  # Kafka topic initialization
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: mf-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ['/bin/bash', '-c']
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.uploaded --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.upload.failed --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.transcode.requested --partitions 12 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.transcode.progress --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.transcode.completed --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.transcode.failed --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.ai.requested --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.ai.completed --partitions 6 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.ai.moderation.flagged --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.streaming.ready --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic media.deleted --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic user.quota.updated --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic notification.send --partitions 6 --replication-factor 1
+      echo 'Topics created successfully!'
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    networks: [media-net]
+
+  # MinIO (S3-compatible Object Storage)
+  minio:
+    image: minio/minio:latest
+    container_name: mf-minio
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${MF_MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MF_MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - '${MF_PORT_PREFIX:-40}90:9000'
+      - '${MF_PORT_PREFIX:-40}91:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [media-net]
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: mf-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ['/bin/bash', '-c']
+    command: |
+      "
+      mc alias set mf http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin}
+      mc mb --ignore-existing mf/media-raw
+      mc mb --ignore-existing mf/media-processed
+      mc mb --ignore-existing mf/media-thumbnails
+      mc mb --ignore-existing mf/media-hls
+      mc mb --ignore-existing mf/media-temp
+      mc ilm rule add mf/media-temp --expire-days 1
+      echo 'Buckets created!'
+      mc ls mf
+      "
+    networks: [media-net]
+
+  # ═══ UI TOOLS (Development) ═══════════════════
+
+  # Kafka UI
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: mf-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: media-forge
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - '${MF_PORT_PREFIX:-40}80:8080'
+    networks: [media-net]
+
+  # Redis Commander
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: mf-redis-ui
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - '${MF_PORT_PREFIX:-40}81:8081'
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [media-net]
+
+  # ═══ APPLICATION SERVICES ═════════════════════
+
+  # User Service
+  user-service:
+    build:
+      context: .
+      dockerfile: services/user-service/Dockerfile
+    container_name: mf-user-service
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:${MF_PG_USER_PASS:-changeme}@pg-user:5432/user_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BROKERS: kafka:9092
+      JWT_SECRET: ${MF_JWT_SECRET:-super-secret-dev-key-change-in-production}
+      JWT_EXPIRES_IN: ${MF_JWT_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${MF_JWT_REFRESH_EXPIRES_IN:-7d}
+    ports:
+      - '${MF_PORT_PREFIX:-40}01:3001'
+    depends_on:
+      pg-user:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks: [media-net]
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: mf-api-gateway
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      USER_SERVICE_URL: http://user-service:3001
+      JWT_SECRET: ${MF_JWT_SECRET:-super-secret-dev-key-change-in-production}
+    ports:
+      - '${MF_PORT_PREFIX:-40}00:3000'
+    depends_on:
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+    networks: [media-net]
+
+volumes:
+  pg-user-data:
+  pg-upload-data:
+  pg-catalog-data:
+  pg-transcode-data:
+  pg-ai-data:
+  redis-data:
+  kafka-data:
+  minio-data:
+
+networks:
+  media-net:
+    driver: bridge
