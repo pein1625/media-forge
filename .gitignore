@@ -38,5 +38,7 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Claude
 CLAUDE.md
 .claude/
